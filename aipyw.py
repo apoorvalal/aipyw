@@ -7,7 +7,9 @@ import sklearn
 class aipyw:
 	r"""Augmented Propensity Score Weighting for many discrete treatments.
 
-	Class to fit the Augmented IPW estimator using arbitrary scikit learners. Extends the standard binary treatement estimator to K discrete treatments. For details on influence function, see Cattaneo (2010) JoE.
+	Class to fit the Augmented IPW estimator using arbitrary scikit learners.
+ 	Extends the standard binary treatement estimator to K discrete treatments.
+  	For details on influence function, see Cattaneo (2010) JoE.
 	"""
 
 	def __init__(self, y, w, X, omod, pmod, nf=5, pslb=None):
@@ -20,7 +22,7 @@ class aipyw:
 						omod (sklearn model object): Model object with .fit() and .predict() methods
 						pmod (sklearn model object): Model object with .fit() and .predict_proba() methods
 						nf (int, optional): Number of folds for cross-fitting. Interpreted as no cross-fitting if nf=1 is passed. Defaults to 5.
-												pslb (Float, optional): Lower-bound for propensity score. Use for trimming extreme pscore values.
+						pslb (Float, optional): Lower-bound for propensity score. Use for trimming extreme pscore values.
 		"""
 		self.y = y
 		self.w = w.astype(int) # need integer for indexing later
@@ -86,20 +88,29 @@ class aipyw:
 		##################################################################
 		# compute imputed potential outcomes under each treatment
 		##################################################################
-		# matrix of treatments
+		# matrix of treatments [N X K]
 		self.wmat =np.repeat(self.w, self.K).reshape(self.N, self.K)
-		# matrix of outcomes
+		# matrix of outcomes [N X K]
 		self.ymat = np.repeat(self.y, self.K).reshape((self.N, self.K))
-		# repeated matrix for each treatment level
+		# repeated matrix for each treatment level [N X K]
 		self.wdums = np.repeat(np.arange(self.K).reshape(1, self.K), self.N, axis=0)
 		## final computation on N X K matrices
 		self.ifvals = 1*(self.wdums == self.wmat) * (self.ymat - self.mu) / self.pi + self.mu
 		if np.any(self.pi < self.psthresh):
 			print(
-				f"Poor overlap - some pscores are < {self.psthresh}; Either call summary() with a trimming threshold \n or change the estimand to ATT."
+				f"Poor overlap - some pscores are < {self.psthresh}; Either call summary() with a trimming threshold as lb \n or change the estimand to ATT."
 			)
 
 	def summary(self, lb=None, critval=1.96):
+		# !TODO add argument to target ATT, which uses realised outcomes for treated units and differences imputed POs.
+		"""summarise aipyw model fit. Computes causal contrasts between 0th level (assumed to be control)
+  			and each other value of w (i.e. K-1 treatment effects if w has K levels).
+
+		Args:
+			lb (float, optional): 				Lower bound on propensity score for trimming.
+   												Defaults to None, which corresponds with ATE. Nonzero values no longer target ATE.
+			critval (float, optional): 			Normal distribution critical values for confidencei intervals. Defaults to 1.96.
+		"""
 		if lb or self.pslb: # pscore trimming
 			if lb:
 				self.dropobs = np.where(self.pi < lb)[0]
