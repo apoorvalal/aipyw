@@ -10,9 +10,9 @@ import sklearn.pipeline as skpipe
 import celer as cel
 
 # dml dgps
-from doubleml import datasets 
+from doubleml import datasets
 # this module
-from aipyw import aipyw
+from aipyw import AIPyW
 ```
 
 ```python
@@ -47,3 +47,5 @@ doubledouble.summary()
 #                                     ATE        SE  95% CI-LB  95% CI-UB
 # Treat level 1 - Treat level 0  1.062369  0.071074   0.923063   1.201675
 ```
+
+For a more detailed walkthrough and an example with multiple discrete treatments, see `00_demo.ipynb`.

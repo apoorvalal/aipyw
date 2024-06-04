@@ -1,4 +1,4 @@
-__pycache__/*
+*/__pycache__/*
 *.csv
 *.dta
 *.ipynb_checkpoints
@@ -26,3 +26,4 @@ __pycache__/*
 *.blg
 *.out
 *.synctex.gz
+
