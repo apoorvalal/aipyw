@@ -25,6 +25,7 @@ class AIPyW:
         n_splits=2,
         bal_order=None,
         bal_obj=None,
+        hajek=True,
     ):
         """
         Initialize the AIpyw class.
@@ -37,6 +38,7 @@ class AIPyW:
         - n_splits: The number of splits for cross-validation. Default is 2.
         - bal_order: The order of balance polynomial under linear balancing weights. Default is None, which uses 2.
         - bal_obj: The objective function for balancing weights. Default is None, which uses 'entropy'.
+        - hajek: Whether to use Hajek estimator for IPW. Default is True. Normalizes the propensity scores within each group to sum to 1. Introduces (mild) bias but reduces variance.
         """
 
         self.n_splits = n_splits
@@ -47,6 +49,7 @@ class AIPyW:
         self.riesz_method = riesz_method or "ipw"
         self._bal_order = bal_order or 2
         self._bal_obj = bal_obj or "quadratic"
+        self._hajek = hajek
 
     def fit(self, X, W, Y, n_rff=None):
         """
@@ -94,7 +97,10 @@ class AIPyW:
             self.propensity_scores = self._cross_fit_propensity(X, W)
             # invert it
             for w in range(self.K):
+                # vanilla IPW
                 a_x[:, w] = (W == w) / self.propensity_scores[:, w]
+                if self._hajek:  # normalization for hajek
+                    a_x[:, w] = a_x[:, w] / (self.propensity_scores[:, w].sum())
         elif self.riesz_method in ["linear", "kernel"]:
             if self.riesz_method == "kernel":
                 # nystrom approximation
