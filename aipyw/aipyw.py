@@ -1,10 +1,10 @@
-# %%
 import numpy as np
-import pandas as pd
-import sklearn
+
+from sklearn.base import clone
+from sklearn.linear_model import LogisticRegression, LinearRegression, RidgeCV
+from sklearn.model_selection import KFold
 
 
-# %%
 class AIPyW:
     r"""Augmented Propensity Score Weighting for many discrete treatments.
 
@@ -13,141 +13,155 @@ class AIPyW:
     For details on the influence function, see Cattaneo (2010) JoE.
     """
 
-    def __init__(self, y, w, X, omod, pmod, nf=2, pslb=None):
-        """Initialise an aipyw class that holds data and models.
-
-        Args:
-                                        y (N X 1 Numpy Array): Response vector
-                                        w (N X 1 Numpy Array): Treatment vector (integer valued)
-                                        X (N X K Numpy Array): Covariate Matrix
-                                        omod (sklearn model object): Model object with .fit() and .predict() methods
-                                        pmod (sklearn model object): Model object with .fit() and .predict_proba() methods
-                                        nf (int, optional): Number of folds for cross-fitting. Interpreted as no cross-fitting if nf=1 is passed. Defaults to 5.
-                                        pslb (Float, optional): Lower-bound for propensity score. Use for trimming extreme pscore values.
+    def __init__(
+        self,
+        propensity_model=None,
+        outcome_model=None,
+        balance_model=None,
+        riesz_method="ipw",
+        n_splits=2,
+        bal_order=None,
+    ):
         """
-        self.y = y
-        self.w = w.astype(int)  # need integer for indexing later
-        self.X = X
-        self.w_levels = np.unique(self.w)
-        self.pslb = pslb
-        self.psthresh = self.pslb if self.pslb else 0.02
+        Initialize the AIpyw class.
 
-        # missingness
-        # !TODO: add missing data indicator and inverse selection weights
-
-        # containers for nuisance functions
-        self.K, self.N = len(self.w_levels), len(self.w)
-        self.mu = np.empty((self.N, self.K))
-        self.pi = np.empty((self.N, self.K))
-
-        # crossfit or not
-        if nf > 1:
-            self.crossfit = True
-            self.nf = nf
-        else:
-            self.crossfit = False
-            self.nf = 1
-
-        # nuisance function machine learners
-        self.omod = omod
-        self.pmod = pmod
-
-    def fit(self):
-        ##################################################################
-        # Nuisance functions
-        ##################################################################
-        if self.crossfit:
-            # fit nuisance fns using cross-fitting
-            kf = sklearn.model_selection.KFold(
-                n_splits=self.nf, shuffle=True, random_state=42
-            )
-            # iterate over folds
-            for testI, trainI in kf.split(self.X):
-                # iterate over treatments to fit outcome models
-                for w_lev in self.w_levels:
-                    muWobs = np.intersect1d(np.where(self.w == w_lev), trainI)
-                    # fit outcome model
-                    self.omod.fit(self.X[muWobs, :], self.y[muWobs])
-                    # predict on held-out fold
-                    self.mu[testI, w_lev] = self.omod.predict(self.X[testI, :])
-                # propensity model
-                self.pmod.fit(self.X[trainI, :], self.w[trainI])
-                # predict on held-out fold
-                self.pi[testI, :] = self.pmod.predict_proba(self.X[testI, :])
-        else:
-            for w_lev in self.w_levels:
-                muWobs = self.w == w_lev
-                # fit outcome model
-                self.omod.fit(self.X[muWobs, :], self.y[muWobs])
-                # predict on held-out fold
-                self.mu[:, w_lev] = self.omod.predict(self.X)
-            # propensity model
-            self.pmod.fit(self.X, self.w)
-            # predict on held-out fold
-            self.pi = self.pmod.predict_proba(self.X)
-
-        ##################################################################
-        # compute imputed potential outcomes under each treatment
-        ##################################################################
-        # matrix of treatments [N X K]
-        self.wmat = np.repeat(self.w, self.K).reshape(self.N, self.K)
-        # matrix of outcomes [N X K]
-        self.ymat = np.repeat(self.y, self.K).reshape((self.N, self.K))
-        # repeated matrix for each treatment level [N X K]
-        self.wdums = np.repeat(np.arange(self.K).reshape(1, self.K), self.N, axis=0)
-        ## final computation on N X K matrices
-        self.ifvals = (
-            1 * (self.wdums == self.wmat) * (self.ymat - self.mu) / self.pi + self.mu
-        )
-        if np.any(self.pi < self.psthresh):
-            print(
-                f"Poor overlap - some pscores are < {self.psthresh}; Either call summary() with a trimming threshold as lb \n or change the estimand to ATT."
-            )
-
-    def summary(self, lb=None, critval=1.96):
-        # !TODO add argument to target ATT, which uses realised outcomes for treated units and differences imputed POs.
-        """summarise aipyw model fit. Computes causal contrasts between 0th level (assumed to be control)
-                and each other value of w (i.e. K-1 treatment effects if w has K levels).
-
-        Args:
-                lb (float, optional): 				Lower bound on propensity score for trimming.
-                                                                                        Defaults to None, which corresponds with ATE. Nonzero values no longer target ATE.
-                critval (float, optional): 			Normal distribution critical values for confidencei intervals. Defaults to 1.96.
+        Parameters:
+        - propensity_model: The model used to estimate the propensity scores. Default is None, which uses LogisticRegression.
+        - outcome_model: The model used to estimate the outcome regression. Default is None, which uses LinearRegression.
+        - balance_model: The model used to estimate the balance regression. Default is None, which uses RidgeCV.
+        - riesz_method: The method used for Riesz balancing. Can be 'ipw', 'linear', or 'kernel'. Default is 'ipw'.
+        - n_splits: The number of splits for cross-validation. Default is 2.
+        - bal_order: The order of balance polynomial under linear balancing weights. Default is None, which uses 2.
         """
-        if lb or self.pslb:  # pscore trimming
-            if lb:
-                self.dropobs = np.where(self.pi < lb)[0]
-            elif self.pslb:
-                self.dropobs = np.where(self.pi < self.pslb)[0]
-            n_trimmed = self.dropobs.shape[0]
-            print(f"{n_trimmed} observations trimmed")
-            ifv = self.ifvals[~self.dropobs, :]
-        else:  # no trimming - neyman take the wheel
-            ifv = self.ifvals
-        # influence functions for current computation
-        ifvalsC = ifv[:, 0]
-        ifvalsC = ifvalsC.reshape(ifvalsC.shape[0], 1)
-        ifvalsT = np.delete(ifv, 0, axis=1)
-        # causal contrasts
-        self.causal_contrasts = ifvalsT - ifvalsC
-        # marginal means and SE
-        self.ATEs = self.causal_contrasts.mean(axis=0)
-        self.SEs = np.sqrt(
-            self.causal_contrasts.var(axis=0) / self.causal_contrasts.shape[0]
-        )
-        sumtab = np.c_[
-            self.ATEs,
-            self.SEs,
-            self.ATEs - critval * self.SEs,
-            self.ATEs + critval * self.SEs,
-        ]
-        # make a pretty table with labels
-        self.sumtab = pd.DataFrame(
-            data=sumtab,
-            index=[
-                f"Treat level {self.w_levels[k]} - Treat level {self.w_levels[0]}"
-                for k in range(1, self.K)
-            ],
-            columns=["ATE", "SE", "95% CI-LB", "95% CI-UB"],
-        )
-        print(self.sumtab)
+
+        self.n_splits = n_splits
+        # nuisance models
+        self.propensity_model = propensity_model or LogisticRegression()
+        self.outcome_model = outcome_model or LinearRegression()
+        self.balance_model = balance_model or RidgeCV()
+        self.riesz_method = riesz_method or "ipw"
+        self._bal_order = bal_order or 2
+
+    def fit(self, X, W, Y, n_rff=None):
+        """
+        Fits the AIPYW model to the given data.
+
+        Parameters:
+        X (array-like: N X K): The feature matrix.
+        W (array-like: N-vector): The treatment variable.
+        Y (array-like: N-vector): The outcome variable.
+
+        Returns:
+        self: The fitted AIPYW model.
+        """
+        self.X, self.W, self.Y = X, W, Y
+        self.n, self.p = X.shape
+        self.K = len(np.unique(W))
+        self._n_rff = n_rff or self.n // 5  # default to n/5 fourier features
+        # Cross-fit outcome models for each treatment
+        self.mu_hat = self._cross_fit_outcome(X, W, Y)
+        # Estimate Riesz representer
+        self.a_x = self._estimate_riesz_representer(X, W)
+        # Calculate AIPW estimates
+        self.calculate_aipw_estimates()
+        return self
+
+    def _cross_fit_propensity(self, X, W):
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+        propensity_scores = np.zeros((self.n, self.K))
+
+        for train_index, test_index in kf.split(X):
+            X_train, X_test = X[train_index], X[test_index]
+            W_train = W[train_index]
+
+            model = clone(self.propensity_model)
+            model.fit(X_train, W_train)
+            propensity_scores[test_index] = model.predict_proba(X_test)
+
+        return propensity_scores
+
+    def _estimate_riesz_representer(self, X, W):
+        a_x = np.zeros((len(W), self.K))
+
+        if self.riesz_method == "ipw":
+            # fit pscore
+            self.propensity_scores = self._cross_fit_propensity(X, W)
+            # invert it
+            for w in range(self.K):
+                a_x[:, w] = (W == w) / self.propensity_scores[:, w]
+        elif self.riesz_method in ["linear", "kernel"]:
+            if self.riesz_method == "kernel":
+                # nystrom approximation
+                from sklearn.kernel_approximation import RBFSampler
+
+                rks = RBFSampler(gamma=1, n_components=self._n_rff, random_state=42)
+                X = rks.fit_transform(X)
+            else:
+                from sklearn.preprocessing import PolynomialFeatures
+
+                poly = PolynomialFeatures(degree=self._bal_order, include_bias=False)
+                X = poly.fit_transform(X)
+            kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+            for train_index, test_index in kf.split(X):
+                X_train, X_test = X[train_index], X[test_index]
+                W_train, _ = W[train_index], W[test_index]
+
+                for w in range(self.K):
+                    a_x[test_index, w] = self._linear_balancing(
+                        X_train, W_train, X_test, w
+                    )
+        return a_x
+
+    def _linear_balancing(self, X_train, W_train, X_test, w):
+        model = clone(self.balance_model)
+        y = (W_train == w).astype(float)
+        model.fit(X_train, y)
+        return model.predict(X_test)
+
+    def _riesz_balancing(self, X_train, W_train, X_test, w):
+        # !TODO implement Riesz loss
+        pass
+
+
+    def _cross_fit_outcome(self, X, W, Y):
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+        mu_hat = np.zeros((len(Y), self.K))
+
+        for train_index, test_index in kf.split(X):
+            X_train, X_test = X[train_index], X[test_index]
+            W_train, Y_train = W[train_index], Y[train_index]
+
+            for w in range(self.K):
+                # train outcome model for cell K only on units in cell K
+                mask_train = (W_train == w).flatten()  # accommodate for 2D W
+                model = clone(self.outcome_model)
+                model.fit(X_train[mask_train], Y_train[mask_train])
+                # predict on everyone
+                mu_hat[test_index, w] = model.predict(X_test)
+
+        return mu_hat
+
+    def calculate_aipw_estimates(self):
+        self.aipw_estimates = {}
+        self.influence_functions = np.zeros((len(self.Y), self.K))
+
+        for w in range(self.K):
+            # Uncentered influence function: mu(x) + a(x) * (y - mu(x))
+            self.influence_functions[:, w] = self.mu_hat[:, w] + self.a_x[:, w] * (
+                self.Y - self.mu_hat[:, w]
+            )
+
+            # AIPW estimate of marginal mean
+            marginal_mean = np.mean(self.influence_functions[:, w])
+            marginal_se = np.std(self.influence_functions[:, w]) / np.sqrt(len(self.Y))
+            self.aipw_estimates[f"{w}"] = {"estimate": marginal_mean, "se": marginal_se}
+
+    def summary(self):
+        effects = {}
+        # all pairwise contrasts: nests binary ATE case
+        for i in range(self.K):
+            for j in range(i + 1, self.K):
+                psi_ij = self.influence_functions[:, j] - self.influence_functions[:, i]
+                effect, se = np.mean(psi_ij), np.std(psi_ij) / np.sqrt(self.n)
+                effects[f"{j} vs {i}"] = {"effect": effect, "se": se}
+        return effects

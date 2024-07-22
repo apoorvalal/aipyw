@@ -1,5 +1,52 @@
 import numpy as np
 import scipy
+from scipy.stats import multivariate_normal, uniform, chi2, bernoulli
+
+
+def hainmueller(n_samples=1000, overlap_design=1, pscore_design=1, outcome_design=1):
+    """DGP from Hainmueller (2012) / Froelich (2007)
+
+    Args:
+        n_samples (int, optional): Number of observations . Defaults to 1000.
+        overlap_design (int, optional): Overlap design. 1 is poor, 2 is good, 3 is medium. Defaults to 1.
+        pscore_design (int, optional): pscore design. 1 is linear, 2 is quadratic, 3 is trig. Defaults to 1.
+        outcome_design (int, optional): outcome model design. 1 is linear, 2 is slightly nonlinear, 3 is very nonlinear. Defaults to 1.
+    Returns:
+        tuple: X, D, Y - covariates, treatment, outcome
+    """
+    # Generate covariates
+    mean = [0, 0, 0]
+    cov = np.array([[2, 1, -1], [1, 1, -0.5], [-1, -0.5, 1]])
+    X1, X2, X3 = multivariate_normal.rvs(mean=mean, cov=cov, size=n_samples).T
+    X4 = uniform.rvs(loc=-3, scale=6, size=n_samples)
+    X5 = chi2.rvs(df=1, size=n_samples)
+    X6 = bernoulli.rvs(p=0.5, size=n_samples)
+    X = np.column_stack((X1, X2, X3, X4, X5, X6))
+
+    if overlap_design == 1:
+        epsilon = np.random.normal(0, np.sqrt(30), n_samples)
+    elif overlap_design == 2:
+        epsilon = np.random.normal(0, 10, n_samples)
+    elif overlap_design == 3:
+        epsilon = chi2.rvs(df=5, size=n_samples)
+        epsilon = (epsilon - 5) / np.sqrt(10) * np.sqrt(67.6) + 0.5
+    # pscore
+    if pscore_design == 1:
+        base_term = X1 + 2 * X2 - 2 * X3 - X4 - 0.5 * X5 + X6
+    elif pscore_design == 2:
+        base_term = X1 + X1**2 - X4 * X6
+    elif pscore_design == 3:
+        base_term = 2 * np.cos(X1) + np.sin(np.pi * X2)
+    D = (base_term + epsilon > 0).astype(int)
+    # outcome : zero treatment effect
+    eta = np.random.normal(0, 1, n_samples)
+    if outcome_design == 1:
+        Y = X1 + X2 + X3 - X4 + X5 + X6 + eta
+    elif outcome_design == 2:
+        Y = X1 + X2 + 0.2 * X3 * X4 - np.sqrt(X5) + eta
+    elif outcome_design == 3:
+        Y = 2 * np.cos(X1) + np.tan(np.pi * X2) + (X1 + X2 + X5) ** 2 + eta
+    return Y, D, X
 
 
 def dgp_binary(
@@ -26,7 +73,7 @@ def dgp_binary(
     X = np.random.multivariate_normal(np.zeros(k), np.eye(k), size=n)
     D = np.random.binomial(1, scipy.special.expit(func_t(X)))
     Y = func_y(X) + D * (func_e(X)) + np.random.normal(size=(n,))
-    return Y.reshape(-1, 1), D.reshape(-1, 1), X
+    return Y, D, X
 
 
 def dgp_discrete(
@@ -62,7 +109,7 @@ def dgp_discrete(
     D = np.array([np.random.choice(p, p=prob) for prob in psmat])
     # Calculate outcome
     Y = (X @ β).ravel() + treat_effects[D] + np.random.normal(0, 0.1, size=(n))
-    return Y.reshape(-1, 1), D.reshape(-1, 1), X
+    return Y, D, X
 
 
 def dgp_continuous(
@@ -82,7 +129,7 @@ def dgp_continuous(
         )
         * 20
     )
-    return Y.reshape(-1, 1), D.reshape(-1, 1), X
+    return Y, D, X
 
 
 def generate_toeplitz_matrix(k: int, max_value: float = 0.5, min_value: float = 0.0):
