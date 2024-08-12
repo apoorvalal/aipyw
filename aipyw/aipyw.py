@@ -1,6 +1,5 @@
 from typing import Tuple
 import numpy as np
-
 from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression, LinearRegression, RidgeCV
 from sklearn.model_selection import KFold
@@ -34,7 +33,7 @@ class AIPyW:
         - propensity_model: The model used to estimate the propensity scores. Default is None, which uses LogisticRegression.
         - outcome_model: The model used to estimate the outcome regression. Default is None, which uses LinearRegression.
         - balance_model: The model used to estimate the balance regression. Default is None, which uses RidgeCV.
-        - riesz_method: The method used for Riesz balancing. Can be 'ipw', 'linear', 'kernel', or "balancing". Default is 'ipw'.
+        - riesz_method: The method used for Riesz balancing. Can be 'ipw', 'linear', 'kernel', 'automatic' or "balancing". Default is 'ipw'.
         - n_splits: The number of splits for cross-validation. Default is 2.
         - bal_order: The order of balance polynomial under linear balancing weights. Default is None, which uses 2.
         - bal_obj: The objective function for balancing weights. Default is None, which uses 'entropy'.
@@ -93,22 +92,18 @@ class AIPyW:
         a_x = np.zeros((len(W), self.K))
 
         if self.riesz_method == "ipw":
-            # fit pscore
             self.propensity_scores = self._cross_fit_propensity(X, W)
-            # invert it
             for w in range(self.K):
-                # vanilla IPW
                 a_x[:, w] = (W == w) / self.propensity_scores[:, w]
-                if self._hajek:  # normalization for hajek
+                if self._hajek:
                     a_x[:, w] = a_x[:, w] / (self.propensity_scores[:, w].sum())
         elif self.riesz_method in ["linear", "kernel"]:
             if self.riesz_method == "kernel":
-                # nystrom approximation
                 from sklearn.kernel_approximation import RBFSampler
 
                 rks = RBFSampler(gamma=1, n_components=self._n_rff, random_state=42)
                 X = rks.fit_transform(X)
-            else:
+            else:  # linear
                 from sklearn.preprocessing import PolynomialFeatures
 
                 poly = PolynomialFeatures(degree=self._bal_order, include_bias=False)
@@ -117,17 +112,33 @@ class AIPyW:
             for train_index, test_index in kf.split(X):
                 X_train, X_test = X[train_index], X[test_index]
                 W_train, _ = W[train_index], W[test_index]
-
                 for w in range(self.K):
                     a_x[test_index, w] = self._linear_balancing(
                         X_train, W_train, X_test, w
                     )
-        elif self.riesz_method == "riesz":
-            raise NotImplementedError("Riesz balancing not yet implemented.")
+
+        elif self.riesz_method == "automatic":
+            # Add automatic estimation method
+            for w in range(self.K):
+                mask = W == w
+                X_w = X[mask]
+                n_w = X_w.shape[0]
+                overall_mean = np.mean(X, axis=0)
+
+                Phi_w = np.c_[np.ones(n_w), X_w]
+                Phi_q = np.r_[1, overall_mean]
+
+                A = (1 / n_w) * Phi_w.T @ Phi_w + 1e-4 * np.eye(X.shape[1] + 1)
+                b = (1 / len(W)) * Phi_q
+
+                theta = np.linalg.solve(A, b)
+                a_x[mask, w] = Phi_w @ theta * (len(W) / n_w)
         elif self.riesz_method == "balancing":
             for w in range(self.K):
                 a_x[:, w] = self._balancing(X, w)
-                pass
+        else:
+            raise ValueError(f"Unknown Riesz method: {self.riesz_method}")
+
         return a_x
 
     def _balancing(self, X, w):
@@ -150,12 +161,6 @@ class AIPyW:
         y = (W_train == w).astype(float)
         model.fit(X_train, y)
         return model.predict(X_test)
-
-    def _riesz_balancing(self, X_train, W_train, X_test, w):
-        # !TODO implement Riesz loss
-        # α = argmin E [ alpha(W) ** 2 - 2m(D; α)]
-
-        pass
 
     def _cross_fit_outcome(self, X, W, Y):
         kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
