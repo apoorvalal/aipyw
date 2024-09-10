@@ -74,112 +74,6 @@ class AIPyW:
         self.calculate_aipw_estimates()
         return self
 
-    def _cross_fit_propensity(self, X, W):
-        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
-        propensity_scores = np.zeros((self.n, self.K))
-
-        for train_index, test_index in kf.split(X):
-            X_train, X_test = X[train_index], X[test_index]
-            W_train = W[train_index]
-
-            model = clone(self.propensity_model)
-            model.fit(X_train, W_train)
-            propensity_scores[test_index] = model.predict_proba(X_test)
-
-        return propensity_scores
-
-    def _estimate_riesz_representer(self, X, W):
-        a_x = np.zeros((len(W), self.K))
-
-        if self.riesz_method == "ipw":
-            self.propensity_scores = self._cross_fit_propensity(X, W)
-            for w in range(self.K):
-                a_x[:, w] = (W == w) / self.propensity_scores[:, w]
-                if self._hajek:
-                    a_x[:, w] = a_x[:, w] / (self.propensity_scores[:, w].sum())
-        elif self.riesz_method in ["linear", "kernel"]:
-            if self.riesz_method == "kernel":
-                from sklearn.kernel_approximation import RBFSampler
-
-                rks = RBFSampler(gamma=1, n_components=self._n_rff, random_state=42)
-                X = rks.fit_transform(X)
-            else:  # linear
-                from sklearn.preprocessing import PolynomialFeatures
-
-                poly = PolynomialFeatures(degree=self._bal_order, include_bias=False)
-                X = poly.fit_transform(X)
-            kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
-            for train_index, test_index in kf.split(X):
-                X_train, X_test = X[train_index], X[test_index]
-                W_train, _ = W[train_index], W[test_index]
-                for w in range(self.K):
-                    a_x[test_index, w] = self._linear_balancing(
-                        X_train, W_train, X_test, w
-                    )
-
-        elif self.riesz_method == "automatic":
-            # Add automatic estimation method
-            for w in range(self.K):
-                mask = W == w
-                X_w = X[mask]
-                n_w = X_w.shape[0]
-                overall_mean = np.mean(X, axis=0)
-
-                Phi_w = np.c_[np.ones(n_w), X_w]
-                Phi_q = np.r_[1, overall_mean]
-
-                A = (1 / n_w) * Phi_w.T @ Phi_w + 1e-4 * np.eye(X.shape[1] + 1)
-                b = (1 / len(W)) * Phi_q
-
-                theta = np.linalg.solve(A, b)
-                a_x[mask, w] = Phi_w @ theta * (len(W) / n_w)
-        elif self.riesz_method == "balancing":
-            for w in range(self.K):
-                a_x[:, w] = self._balancing(X, w)
-        else:
-            raise ValueError(f"Unknown Riesz method: {self.riesz_method}")
-
-        return a_x
-
-    def _balancing(self, X, w):
-        scaler = MinMaxScaler()
-        Xw = scaler.fit_transform(X[self.W == w])
-        X_all = scaler.transform(X)
-        # store deviation from the target covariates
-        Z = np.c_[
-            np.ones(Xw.shape[0]),
-            Xw - np.average(X_all, axis=0),
-        ]
-        weight_link, beta, status = balancing_weights(
-            Z, objective=self._bal_obj, min_weight=0.0, max_weight=1.0, l2_norm=0
-        )
-        Xmat = np.c_[np.ones(X_all.shape[0]), X_all]
-        return weight_link(np.dot(Xmat, beta))
-
-    def _linear_balancing(self, X_train, W_train, X_test, w):
-        model = clone(self.balance_model)
-        y = (W_train == w).astype(float)
-        model.fit(X_train, y)
-        return model.predict(X_test)
-
-    def _cross_fit_outcome(self, X, W, Y):
-        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
-        mu_hat = np.zeros((len(Y), self.K))
-
-        for train_index, test_index in kf.split(X):
-            X_train, X_test = X[train_index], X[test_index]
-            W_train, Y_train = W[train_index], Y[train_index]
-
-            for w in range(self.K):
-                # train outcome model for cell K only on units in cell K
-                mask_train = (W_train == w).flatten()  # accommodate for 2D W
-                model = clone(self.outcome_model)
-                model.fit(X_train[mask_train], Y_train[mask_train])
-                # predict on everyone
-                mu_hat[test_index, w] = model.predict(X_test)
-
-        return mu_hat
-
     def calculate_aipw_estimates(self):
         self.aipw_estimates = {}
         self.influence_functions = np.zeros((len(self.Y), self.K))
@@ -205,6 +99,115 @@ class AIPyW:
                 effects[f"{j} vs {i}"] = {"effect": effect, "se": se}
         return effects
 
+    ######################################################################
+    def _estimate_riesz_representer(self, X, W):
+        """Internal method to estimate the Riesz representer."""
+        a_x = np.zeros((len(W), self.K))
+
+        if self.riesz_method == "ipw":  # farm out to cross-fit propensity
+            self.propensity_scores = self._cross_fit_propensity(X, W)
+            for w in range(self.K):
+                a_x[:, w] = (W == w) / self.propensity_scores[:, w]
+                if self._hajek:
+                    a_x[:, w] = a_x[:, w] / (self.propensity_scores[:, w].sum())
+        elif self.riesz_method == "balancing":  # farm out to balancing
+            for w in range(self.K):
+                a_x[:, w] = self._balancing(X, w)
+        elif self.riesz_method in ["linear", "kernel"]:  # fit linear or kernel ridge
+            if self.riesz_method == "kernel":
+                from sklearn.kernel_approximation import RBFSampler
+
+                rks = RBFSampler(gamma=1, n_components=self._n_rff, random_state=42)
+                X = rks.fit_transform(X)
+            else:  # linear
+                from sklearn.preprocessing import PolynomialFeatures
+
+                poly = PolynomialFeatures(degree=self._bal_order, include_bias=False)
+                X = poly.fit_transform(X)
+            kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+            for train_index, test_index in kf.split(X):
+                X_train, X_test = X[train_index], X[test_index]
+                W_train, _ = W[train_index], W[test_index]
+                for w in range(self.K):
+                    a_x[test_index, w] = self._linear_balancing(
+                        X_train, W_train, X_test, w
+                    )
+        elif self.riesz_method == "automatic":  # ADML method
+            for w in range(self.K):
+                mask = W == w
+                X_w = X[mask]
+                n_w = X_w.shape[0]
+                overall_mean = np.mean(X, axis=0)
+
+                Phi_w = np.c_[np.ones(n_w), X_w]
+                Phi_q = np.r_[1, overall_mean]
+
+                A = (1 / n_w) * Phi_w.T @ Phi_w + 1e-4 * np.eye(X.shape[1] + 1)
+                b = (1 / len(W)) * Phi_q
+
+                theta = np.linalg.solve(A, b)
+                a_x[mask, w] = Phi_w @ theta * (len(W) / n_w)
+        else:
+            raise ValueError(f"Unknown Riesz method: {self.riesz_method}")
+        return a_x
+
+    def _cross_fit_propensity(self, X, W):
+        """Internal method to cross-fit propensity scores."""
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+        propensity_scores = np.zeros((self.n, self.K))
+
+        for train_index, test_index in kf.split(X):
+            X_train, X_test = X[train_index], X[test_index]
+            W_train = W[train_index]
+
+            model = clone(self.propensity_model)
+            model.fit(X_train, W_train)
+            propensity_scores[test_index] = model.predict_proba(X_test)
+
+        return propensity_scores
+
+    def _balancing(self, X, w):
+        """Internal method to balance covariates using balancing weights."""
+        scaler = MinMaxScaler()
+        Xw = scaler.fit_transform(X[self.W == w])
+        X_all = scaler.transform(X)
+        # store deviation from the target covariates
+        Z = np.c_[
+            np.ones(Xw.shape[0]),
+            Xw - np.average(X_all, axis=0),
+        ]
+        weight_link, beta, status = balancing_weights(
+            Z, objective=self._bal_obj, min_weight=0.0, max_weight=1.0, l2_norm=0
+        )
+        Xmat = np.c_[np.ones(X_all.shape[0]), X_all]
+        return weight_link(np.dot(Xmat, beta))
+
+    def _linear_balancing(self, X_train, W_train, X_test, w):
+        model = clone(self.balance_model)
+        y = (W_train == w).astype(float)
+        model.fit(X_train, y)
+        return model.predict(X_test)
+
+    ############################################################
+    def _cross_fit_outcome(self, X, W, Y):
+        """Internal method to cross-fit outcome models."""
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
+        mu_hat = np.zeros((len(Y), self.K))
+
+        for train_index, test_index in kf.split(X):
+            X_train, X_test = X[train_index], X[test_index]
+            W_train, Y_train = W[train_index], Y[train_index]
+
+            for w in range(self.K):
+                # train outcome model for cell K only on units in cell K
+                mask_train = (W_train == w).flatten()  # accommodate for 2D W
+                model = clone(self.outcome_model)
+                model.fit(X_train[mask_train], Y_train[mask_train])
+                # predict on everyone
+                mu_hat[test_index, w] = model.predict(X_test)
+
+        return mu_hat
+
 
 def balancing_weights(
     z: np.ndarray,
@@ -215,13 +218,10 @@ def balancing_weights(
 ) -> Tuple[np.ndarray, bool]:
     """Calibrates covariates toward target.
 
-    It solves a constrained convex optimization problem that minimizes the
+    solves a constrained convex optimization problem that minimizes the
     variation of weights for units while achieving direct covariate
     balance. The weighted mean of covariates would match the simple mean
-    of target covariates up to a prespecified L2 norm. If there is no feasible
-    solution of weights to satisfy the covariate balance constraint, it would
-    exit with the boolean optimization status set false, in which case, one needs
-    to relax the covariate constraint by increasing the `l2_norm`
+    of target covariates up to a prespecified L2 norm.
     There are two choices of the optimization objective: entropy of the weights
     (entropy balancing, or EB) and effective sample size implied by the weights
     (quadratic balancing, or QB). EB can be viewed as minimizing the
