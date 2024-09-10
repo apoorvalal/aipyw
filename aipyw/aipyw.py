@@ -4,7 +4,8 @@ from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression, LinearRegression, RidgeCV
 from sklearn.model_selection import KFold
 from scipy import optimize
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, PolynomialFeatures
+from sklearn.kernel_approximation import RBFSampler
 
 
 class AIPyW:
@@ -24,7 +25,6 @@ class AIPyW:
         n_splits=2,
         bal_order=None,
         bal_obj=None,
-        hajek=True,
     ):
         """
         Initialize the AIpyw class.
@@ -37,7 +37,6 @@ class AIPyW:
         - n_splits: The number of splits for cross-validation. Default is 2.
         - bal_order: The order of balance polynomial under linear balancing weights. Default is None, which uses 2.
         - bal_obj: The objective function for balancing weights. Default is None, which uses 'entropy'.
-        - hajek: Whether to use Hajek estimator for IPW. Default is True. Normalizes the propensity scores within each group to sum to 1. Introduces (mild) bias but reduces variance.
         """
 
         self.n_splits = n_splits
@@ -45,10 +44,9 @@ class AIPyW:
         self.propensity_model = propensity_model or LogisticRegression()
         self.outcome_model = outcome_model or LinearRegression()
         self.balance_model = balance_model or RidgeCV()
-        self.riesz_method = riesz_method or "ipw"
+        self.riesz_method = riesz_method or "ipw-hajek"
         self._bal_order = bal_order or 2
         self._bal_obj = bal_obj or "quadratic"
-        self._hajek = hajek
 
     def fit(self, X, W, Y, n_rff=None):
         """
@@ -89,14 +87,17 @@ class AIPyW:
             marginal_se = np.std(self.influence_functions[:, w]) / np.sqrt(len(self.Y))
             self.aipw_estimates[f"{w}"] = {"estimate": marginal_mean, "se": marginal_se}
 
-    def summary(self):
+    def summary(self, prec=5):
         effects = {}
         # all pairwise contrasts: nests binary ATE case
         for i in range(self.K):
             for j in range(i + 1, self.K):
                 psi_ij = self.influence_functions[:, j] - self.influence_functions[:, i]
                 effect, se = np.mean(psi_ij), np.std(psi_ij) / np.sqrt(self.n)
-                effects[f"{j} vs {i}"] = {"effect": effect, "se": se}
+                effects[f"{j} vs {i}"] = {
+                    "effect": np.round(effect, prec),
+                    "se": np.round(se, prec),
+                }
         return effects
 
     ######################################################################
@@ -104,23 +105,24 @@ class AIPyW:
         """Internal method to estimate the Riesz representer."""
         a_x = np.zeros((len(W), self.K))
 
-        if self.riesz_method == "ipw":  # farm out to cross-fit propensity
+        if self.riesz_method in [
+            "ipw",
+            "ipw-hajek",
+        ]:  # farm out to cross-fit propensity
             self.propensity_scores = self._cross_fit_propensity(X, W)
             for w in range(self.K):
                 a_x[:, w] = (W == w) / self.propensity_scores[:, w]
-                if self._hajek:
+                if self.riesz_method == "ipw-hajek":
                     a_x[:, w] = a_x[:, w] / (self.propensity_scores[:, w].sum())
         elif self.riesz_method == "balancing":  # farm out to balancing
             for w in range(self.K):
                 a_x[:, w] = self._balancing(X, w)
         elif self.riesz_method in ["linear", "kernel"]:  # fit linear or kernel ridge
             if self.riesz_method == "kernel":
-                from sklearn.kernel_approximation import RBFSampler
 
                 rks = RBFSampler(gamma=1, n_components=self._n_rff, random_state=42)
                 X = rks.fit_transform(X)
             else:  # linear
-                from sklearn.preprocessing import PolynomialFeatures
 
                 poly = PolynomialFeatures(degree=self._bal_order, include_bias=False)
                 X = poly.fit_transform(X)
@@ -208,6 +210,7 @@ class AIPyW:
 
         return mu_hat
 
+######################################################################
 
 def balancing_weights(
     z: np.ndarray,
