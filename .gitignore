@@ -1,3 +1,5 @@
+scratch.ipynb
+aipyw.egg-info/*
 */__pycache__/*
 *.csv
 *.dta
