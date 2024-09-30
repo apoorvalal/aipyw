@@ -1,9 +1,8 @@
 from setuptools import setup, find_packages
-
-from setuptools import setup, find_packages
 import os
 
 here = os.path.abspath(os.path.dirname(__file__))
+
 
 def read_requirements():
     try:
@@ -12,6 +11,7 @@ def read_requirements():
     except FileNotFoundError:
         return []
 
+
 def read_long_description():
     try:
         with open(os.path.join(here, "README.md"), "r", encoding="utf-8") as fh:
@@ -19,14 +19,15 @@ def read_long_description():
     except FileNotFoundError:
         return ""
 
+
 setup(
-    name='aipyw',
-    version='0.0.1',
-    url='https://github.com/apoorvalal/aipyw',
-    description='Minimal causal inference library with scikit-learn and numpy',
+    name="aipyw",
+    version="0.0.1",
+    url="https://github.com/apoorvalal/aipyw",
+    description="Minimal causal inference library with scikit-learn and numpy",
     packages=find_packages(),
     install_requires=read_requirements(),
-    author='Apoorva Lal',
+    author="Apoorva Lal",
     author_email="lal.apoorva@gmail.com",
     long_description=read_long_description(),
     long_description_content_type="text/markdown",
@@ -41,10 +42,9 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
     ],
-    python_requires='>=3.7',
+    python_requires=">=3.7",
     include_package_data=True,
     package_data={
-        'duckreg': ['*.py'],
+        "duckreg": ["*.py"],
     },
 )
-

@@ -6,6 +6,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.preprocessing import StandardScaler
 
+
 class IpwRa:
     def __init__(self, estimand: str = "ATE", typ: str = "ipwra"):
         self.estimand = estimand
@@ -13,13 +14,20 @@ class IpwRa:
         self.point_estimate = None
         self.bootstrap_results = None
 
-    def fit(self, df: pd.DataFrame, outcome: str = "Y", treatment: str = "W",
-            covariates: Optional[List[str]] = None, alpha: float = 0.05,
-            n_iterations: int = 100, n_jobs: int = -1):
+    def fit(
+        self,
+        df: pd.DataFrame,
+        outcome: str = "Y",
+        treatment: str = "W",
+        covariates: Optional[List[str]] = None,
+        alpha: float = 0.05,
+        n_iterations: int = 100,
+        n_jobs: int = -1,
+    ):
         if covariates is None:
             covariates = df.columns.difference([outcome, treatment]).tolist()
 
-        y,w,X = df[outcome].values, df[treatment].values, df[covariates].values
+        y, w, X = df[outcome].values, df[treatment].values, df[covariates].values
 
         self.point_estimate = self._ipwra(y, w, X)
 
@@ -33,12 +41,12 @@ class IpwRa:
 
         if self.bootstrap_results is not None:
             lb, ub = np.percentile(
-                self.bootstrap_results,
-                [alpha / 2 * 100, (1 - alpha / 2) * 100]
+                self.bootstrap_results, [alpha / 2 * 100, (1 - alpha / 2) * 100]
             )
             result[f"{(1-alpha)*100}% CI (Bootstrap)"] = np.round([lb, ub], 4)
 
         return result
+
     ######################################################################
 
     def _ipwra(self, y: np.ndarray, w: np.ndarray, X: np.ndarray):
@@ -46,7 +54,7 @@ class IpwRa:
         sca = StandardScaler()
         Xtilde = sca.fit_transform(X)
         if self.typ in ["ipwra", "ipw"]:
-            lr = LogisticRegression(C=1e12)
+            lr = LogisticRegression(penalty=None, max_iter=1000)
             lr.fit(X, w)
             p = lr.predict_proba(X)
             if self.estimand == "ATE":
@@ -67,14 +75,22 @@ class IpwRa:
 
         return LinearRegression().fit(XX, y, sample_weight=wt).coef_[1]
 
-    def _bootstrap(self, df: pd.DataFrame, outcome: str, treatment: str,
-                   covariates: List[str], n_iterations: int, n_jobs: int):
+    def _bootstrap(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        treatment: str,
+        covariates: List[str],
+        n_iterations: int,
+        n_jobs: int,
+    ):
         # bootstrap confidence interval
         def onerep():
             bsamp = df.sample(n=len(df), replace=True)
-            return self._ipwra(bsamp[outcome].values, bsamp[treatment].values, bsamp[covariates].values)
+            return self._ipwra(
+                bsamp[outcome].values, bsamp[treatment].values, bsamp[covariates].values
+            )
 
-        self.bootstrap_results = np.array(Parallel(n_jobs=n_jobs)(
-            delayed(onerep)() for _ in range(n_iterations)
-        ))
-
+        self.bootstrap_results = np.array(
+            Parallel(n_jobs=n_jobs)(delayed(onerep)() for _ in range(n_iterations))
+        )
