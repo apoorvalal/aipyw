@@ -2,5 +2,6 @@ numpy
 scikit-learn
 scipy
 pandas
-xgboost
+xgboost-cpu
+pdoc
 

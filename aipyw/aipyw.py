@@ -1,12 +1,12 @@
 import numpy as np
 from sklearn.base import clone
-from sklearn.linear_model import LogisticRegression, LinearRegression, RidgeCV
+from sklearn.kernel_approximation import RBFSampler
+from sklearn.linear_model import LinearRegression, LogisticRegression, RidgeCV
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import MinMaxScaler, PolynomialFeatures
-from sklearn.kernel_approximation import RBFSampler
 
-from .weights import balancing_weights
 from .calibrate import isoreg_with_xgboost
+from .weights import balancing_weights
 
 
 class AIPyW:
@@ -15,6 +15,14 @@ class AIPyW:
     Class to fit the Augmented IPW estimator using arbitrary scikit learners.
     Extends the standard binary treatement estimator to K discrete treatments.
     For details on the influence function, see Cattaneo (2010) JoE.
+
+    Marginal mean is estimated using the EIF
+    $$
+    \hat{\mu}(X) + \hat{\alpha}(X) (Y - \hat{\mu}(X))
+    $$
+
+    where $\hat{\mu}(X)$ is the cross-fitted outcome model and $\hat{\alpha}(X)$ is the Riesz representer.
+    Traditional choice of Riesz representer is the inverse propensity score.
     """
 
     def __init__(
@@ -125,11 +133,9 @@ class AIPyW:
                 a_x[:, w] = self._balancing(X, w)
         elif self.riesz_method in ["linear", "kernel"]:  # fit linear or kernel ridge
             if self.riesz_method == "kernel":
-
                 rks = RBFSampler(gamma=1, n_components=self._n_rff, random_state=42)
                 X = rks.fit_transform(X)
             else:  # linear
-
                 poly = PolynomialFeatures(degree=self._bal_order, include_bias=False)
                 X = poly.fit_transform(X)
             kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=42)
