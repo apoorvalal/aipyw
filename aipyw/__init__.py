@@ -4,6 +4,7 @@
 
 from .aipyw import AIPyW
 from .ipwra import IpwRa
+from .weights import CovariateBalancer
 from .balnet_adelie import (
     BalnetATEFit,
     CBPSGlm,
