@@ -1,0 +1,11 @@
+Single run effects:
+quadratic   -0.24279
+entropy      0.14993
+balnet       0.15012
+Name: Kang-Schafer-style transformed covariates, dtype: float64
+
+RMSE over full run:
+balancing_quadratic    1.562634
+balancing_entropy      1.571833
+balancing_balnet       1.583337
+dtype: float64
