@@ -3,10 +3,10 @@ from sklearn.base import clone
 from sklearn.kernel_approximation import RBFSampler
 from sklearn.linear_model import LinearRegression, LogisticRegression, RidgeCV
 from sklearn.model_selection import KFold
-from sklearn.preprocessing import MinMaxScaler, PolynomialFeatures
+from sklearn.preprocessing import PolynomialFeatures
 
 from .calibrate import isoreg_with_xgboost
-from .weights import balancing_weights
+from .weights import CovariateBalancer
 
 
 class AIPyW:
@@ -202,20 +202,20 @@ class AIPyW:
         return propensity_scores
 
     def _balancing(self, X, w):
-        """Internal method to balance covariates using balancing weights."""
-        scaler = MinMaxScaler()
-        Xw = scaler.fit_transform(X[self.W == w])
-        X_all = scaler.transform(X)
-        # store deviation from the target covariates
-        Z = np.c_[
-            np.ones(Xw.shape[0]),
-            Xw - np.average(X_all, axis=0),
-        ]
-        weight_link, beta, status = balancing_weights(
-            Z, objective=self._bal_obj, min_weight=0.0, max_weight=1.0, l2_norm=0
-        )
-        Xmat = np.c_[np.ones(X_all.shape[0]), X_all]
-        return weight_link(np.dot(Xmat, beta))
+        """Internal method to balance covariates using balancing weights.
+
+        The Riesz representer for the marginal mean of arm ``w`` must be zero
+        outside that arm.  The calibration problem is solved only on units with
+        ``W == w`` and targets the full-sample covariate mean.  Predictions must
+        therefore be evaluated on the same centered basis used in the estimating
+        equation, then masked to the arm.
+        """
+        mask = self.W == w
+        balancer = CovariateBalancer(method=self._bal_obj, min_weight=0.0, max_weight=1.0, l2_norm=0)
+        balancer.fit(X[mask], target_X=X)
+        out = np.zeros(X.shape[0])
+        out[mask] = balancer.transform(X[mask])
+        return out
 
     def _linear_balancing(self, X_train, W_train, X_test, w):
         model = clone(self.balance_model)
