@@ -202,20 +202,31 @@ class AIPyW:
         return propensity_scores
 
     def _balancing(self, X, w):
-        """Internal method to balance covariates using balancing weights."""
+        """Internal method to balance covariates using balancing weights.
+
+        The Riesz representer for the marginal mean of arm ``w`` must be zero
+        outside that arm.  The calibration problem is solved only on units with
+        ``W == w`` and targets the full-sample covariate mean.  Predictions must
+        therefore be evaluated on the same centered basis used in the estimating
+        equation, then masked to the arm.
+        """
         scaler = MinMaxScaler()
-        Xw = scaler.fit_transform(X[self.W == w])
+        mask = self.W == w
+        Xw = scaler.fit_transform(X[mask])
         X_all = scaler.transform(X)
+        target = np.average(X_all, axis=0)
         # store deviation from the target covariates
         Z = np.c_[
             np.ones(Xw.shape[0]),
-            Xw - np.average(X_all, axis=0),
+            Xw - target,
         ]
         weight_link, beta, status = balancing_weights(
             Z, objective=self._bal_obj, min_weight=0.0, max_weight=1.0, l2_norm=0
         )
-        Xmat = np.c_[np.ones(X_all.shape[0]), X_all]
-        return weight_link(np.dot(Xmat, beta))
+        Z_all = np.c_[np.ones(X_all.shape[0]), X_all - target]
+        out = np.zeros(X_all.shape[0])
+        out[mask] = weight_link(np.dot(Z_all[mask], beta))
+        return out
 
     def _linear_balancing(self, X_train, W_train, X_test, w):
         model = clone(self.balance_model)
