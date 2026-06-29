@@ -45,6 +45,6 @@ setup(
     python_requires=">=3.7",
     include_package_data=True,
     package_data={
-        "duckreg": ["*.py"],
+        "aipyw": ["data/acic/*.csv"],
     },
 )

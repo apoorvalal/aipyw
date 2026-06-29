@@ -1,7 +1,9 @@
 scratch.ipynb
 aipyw.egg-info/*
 */__pycache__/*
+__pycache__/
 *.csv
+!aipyw/data/acic/*.csv
 *.dta
 *.ipynb_checkpoints
 .vscode/*
@@ -28,4 +30,4 @@ aipyw.egg-info/*
 *.blg
 *.out
 *.synctex.gz
-
+build/
